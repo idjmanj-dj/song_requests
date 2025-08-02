@@ -1,18 +1,20 @@
 "use client"
 
 import type React from "react"
-
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
-import { ExternalLink, Heart, DollarSign, Disc3, Radio } from "lucide-react"
+import { ExternalLink, Heart, DollarSign, Disc3, Radio, Loader2 } from "lucide-react"
 import DJBanner from "./dj-banner"
+import { createSongRequest } from "./lib/database"
 
 export default function SongRequestForm() {
   const [isSubmitted, setIsSubmitted] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [formData, setFormData] = useState({
     songTitle: "",
     artist: "",
@@ -21,17 +23,46 @@ export default function SongRequestForm() {
     specialMessage: "",
   })
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    // Simulate song request submission
-    console.log("Song request submitted:", formData)
-    setIsSubmitted(true)
+    setIsSubmitting(true)
+    setError(null)
+
+    try {
+      await createSongRequest({
+        song_title: formData.songTitle,
+        artist: formData.artist || undefined,
+        song_link: formData.songLink || undefined,
+        requester_name: formData.requesterName || undefined,
+        special_message: formData.specialMessage || undefined,
+      })
+
+      console.log("Song request saved to database!")
+      setIsSubmitted(true)
+    } catch (err) {
+      console.error("Error submitting song request:", err)
+      setError("Failed to submit request. Please try again.")
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     setFormData({
       ...formData,
       [e.target.name]: e.target.value,
+    })
+  }
+
+  const resetForm = () => {
+    setIsSubmitted(false)
+    setError(null)
+    setFormData({
+      songTitle: "",
+      artist: "",
+      songLink: "",
+      requesterName: "",
+      specialMessage: "",
     })
   }
 
@@ -72,7 +103,7 @@ export default function SongRequestForm() {
                       asChild
                     >
                       <a
-                        href="https://www.instagram.com/accounts/login/?hl=en"
+                        href="https://www.instagram.com/idjmanj"
                         target="_blank"
                         rel="noopener noreferrer"
                         className="flex items-center justify-center gap-2"
@@ -103,7 +134,7 @@ export default function SongRequestForm() {
                 </div>
 
                 <Button
-                  onClick={() => setIsSubmitted(false)}
+                  onClick={resetForm}
                   variant="ghost"
                   className="w-full mt-6 text-cyan-300 hover:text-white hover:bg-cyan-600/20 border border-cyan-500/30 font-semibold"
                 >
@@ -154,6 +185,12 @@ export default function SongRequestForm() {
               </div>
             </CardHeader>
             <CardContent className="relative z-10">
+              {error && (
+                <div className="mb-4 p-3 bg-red-500/20 border border-red-400/50 rounded-lg text-red-300 text-sm">
+                  {error}
+                </div>
+              )}
+
               <form onSubmit={handleSubmit} className="space-y-5">
                 <div className="space-y-2">
                   <Label htmlFor="songTitle" className="text-pink-300 font-semibold">
@@ -166,6 +203,7 @@ export default function SongRequestForm() {
                     value={formData.songTitle}
                     onChange={handleInputChange}
                     required
+                    disabled={isSubmitting}
                     className="bg-black/50 border-purple-400/50 text-white placeholder-gray-400 focus:border-pink-400 focus:ring-pink-400/50"
                   />
                 </div>
@@ -180,6 +218,7 @@ export default function SongRequestForm() {
                     placeholder="Who's the artist?"
                     value={formData.artist}
                     onChange={handleInputChange}
+                    disabled={isSubmitting}
                     className="bg-black/50 border-purple-400/50 text-white placeholder-gray-400 focus:border-cyan-400 focus:ring-cyan-400/50"
                   />
                 </div>
@@ -195,6 +234,7 @@ export default function SongRequestForm() {
                     placeholder="Spotify, YouTube, Apple Music..."
                     value={formData.songLink}
                     onChange={handleInputChange}
+                    disabled={isSubmitting}
                     className="bg-black/50 border-purple-400/50 text-white placeholder-gray-400 focus:border-green-400 focus:ring-green-400/50"
                   />
                 </div>
@@ -209,6 +249,7 @@ export default function SongRequestForm() {
                     placeholder="What should we call you?"
                     value={formData.requesterName}
                     onChange={handleInputChange}
+                    disabled={isSubmitting}
                     className="bg-black/50 border-purple-400/50 text-white placeholder-gray-400 focus:border-yellow-400 focus:ring-yellow-400/50"
                   />
                 </div>
@@ -224,15 +265,24 @@ export default function SongRequestForm() {
                     value={formData.specialMessage}
                     onChange={handleInputChange}
                     rows={3}
+                    disabled={isSubmitting}
                     className="bg-black/50 border-purple-400/50 text-white placeholder-gray-400 focus:border-purple-400 focus:ring-purple-400/50"
                   />
                 </div>
 
                 <Button
                   type="submit"
-                  className="w-full bg-gradient-to-r from-pink-600 via-purple-600 to-cyan-600 hover:from-pink-500 hover:via-purple-500 hover:to-cyan-500 text-white font-bold py-3 text-lg transform hover:scale-105 transition-all duration-200 shadow-lg shadow-purple-500/50"
+                  disabled={isSubmitting}
+                  className="w-full bg-gradient-to-r from-pink-600 via-purple-600 to-cyan-600 hover:from-pink-500 hover:via-purple-500 hover:to-cyan-500 text-white font-bold py-3 text-lg transform hover:scale-105 transition-all duration-200 shadow-lg shadow-purple-500/50 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
                 >
-                  🚀 DROP THE REQUEST 🚀
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                      SUBMITTING...
+                    </>
+                  ) : (
+                    "🚀 DROP THE REQUEST 🚀"
+                  )}
                 </Button>
               </form>
             </CardContent>

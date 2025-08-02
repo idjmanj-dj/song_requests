@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -18,85 +18,89 @@ import {
   ChevronDown,
   Disc3,
   Radio,
+  Loader2,
+  RefreshCw,
 } from "lucide-react"
 import DJBanner from "./dj-banner"
-
-interface SongRequest {
-  id: string
-  songTitle: string
-  artist: string
-  songLink?: string
-  requesterName?: string
-  specialMessage?: string
-  status: "pending" | "playing" | "completed" | "rejected"
-  timestamp: Date
-  priority: number
-}
-
-// Mock data for demonstration
-const mockRequests: SongRequest[] = [
-  {
-    id: "1",
-    songTitle: "Blinding Lights",
-    artist: "The Weeknd",
-    songLink: "https://open.spotify.com/track/0VjIjW4GlULA4LGoDOLVKN",
-    requesterName: "Sarah",
-    specialMessage: "For my birthday! 🎉",
-    status: "pending",
-    timestamp: new Date(Date.now() - 5 * 60000),
-    priority: 1,
-  },
-  {
-    id: "2",
-    songTitle: "Good 4 U",
-    artist: "Olivia Rodrigo",
-    songLink: "https://www.youtube.com/watch?v=gNi_6U5Pm_o",
-    requesterName: "Mike",
-    status: "playing",
-    timestamp: new Date(Date.now() - 10 * 60000),
-    priority: 2,
-  },
-  {
-    id: "3",
-    songTitle: "Levitating",
-    artist: "Dua Lipa",
-    requesterName: "Jessica",
-    specialMessage: "Please play this for our anniversary dance!",
-    status: "pending",
-    timestamp: new Date(Date.now() - 15 * 60000),
-    priority: 3,
-  },
-  {
-    id: "4",
-    songTitle: "Stay",
-    artist: "The Kid LAROI & Justin Bieber",
-    status: "completed",
-    timestamp: new Date(Date.now() - 30 * 60000),
-    priority: 4,
-  },
-]
+import { getSongRequests, updateSongRequestStatus, updateSongRequestPriority, type SongRequest } from "./lib/database"
 
 export default function DJDashboard() {
-  const [requests, setRequests] = useState<SongRequest[]>(mockRequests)
+  const [requests, setRequests] = useState<SongRequest[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [updatingIds, setUpdatingIds] = useState<Set<string>>(new Set())
 
-  const updateRequestStatus = (id: string, status: SongRequest["status"]) => {
-    setRequests((prev) => prev.map((req) => (req.id === id ? { ...req, status } : req)))
+  const loadRequests = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      const data = await getSongRequests()
+      setRequests(data)
+    } catch (err) {
+      console.error("Error loading requests:", err)
+      setError("Failed to load song requests. Please try again.")
+    } finally {
+      setLoading(false)
+    }
   }
 
-  const moveRequest = (id: string, direction: "up" | "down") => {
-    setRequests((prev) => {
-      const index = prev.findIndex((req) => req.id === id)
-      if (index === -1) return prev
+  useEffect(() => {
+    loadRequests()
+  }, [])
 
-      const newRequests = [...prev]
-      const targetIndex = direction === "up" ? index - 1 : index + 1
+  const updateRequestStatus = async (id: string, status: SongRequest["status"]) => {
+    try {
+      setUpdatingIds((prev) => new Set(prev).add(id))
+      await updateSongRequestStatus(id, status)
+      setRequests((prev) => prev.map((req) => (req.id === id ? { ...req, status } : req)))
+    } catch (err) {
+      console.error("Error updating status:", err)
+      setError("Failed to update request status.")
+    } finally {
+      setUpdatingIds((prev) => {
+        const newSet = new Set(prev)
+        newSet.delete(id)
+        return newSet
+      })
+    }
+  }
 
-      if (targetIndex >= 0 && targetIndex < newRequests.length) {
-        ;[newRequests[index], newRequests[targetIndex]] = [newRequests[targetIndex], newRequests[index]]
-      }
+  const moveRequest = async (id: string, direction: "up" | "down") => {
+    const currentIndex = requests.findIndex((req) => req.id === id)
+    if (currentIndex === -1) return
 
-      return newRequests
-    })
+    const newRequests = [...requests]
+    const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1
+
+    if (targetIndex < 0 || targetIndex >= newRequests.length) return // Temporarily swap in UI for immediate feedback
+    ;[newRequests[currentIndex], newRequests[targetIndex]] = [newRequests[targetIndex], newRequests[currentIndex]]
+    setRequests(newRequests)
+
+    try {
+      setUpdatingIds((prev) => new Set(prev).add(id))
+      // Update priority in database based on new position
+      // A more robust priority system might involve re-indexing all priorities
+      // For simplicity, we'll just swap priorities of the two moved items
+      const currentRequest = newRequests[targetIndex] // The one that moved from currentIndex to targetIndex
+      const swappedRequest = newRequests[currentIndex] // The one that moved from targetIndex to currentIndex
+
+      await updateSongRequestPriority(currentRequest.id, swappedRequest.priority)
+      await updateSongRequestPriority(swappedRequest.id, currentRequest.priority)
+
+      // Re-fetch to ensure consistent state after complex priority updates
+      loadRequests()
+    } catch (err) {
+      console.error("Error moving request:", err)
+      setError("Failed to reorder request.")
+      // Revert local state if DB update fails
+      loadRequests()
+    } finally {
+      setUpdatingIds((prev) => {
+        const newSet = new Set(prev)
+        newSet.delete(id)
+        return newSet
+      })
+    }
   }
 
   const getStatusColor = (status: SongRequest["status"]) => {
@@ -114,128 +118,155 @@ export default function DJDashboard() {
     }
   }
 
-  const formatTimeAgo = (date: Date) => {
+  const formatTimeAgo = (dateString: string) => {
+    const date = new Date(dateString)
     const minutes = Math.floor((Date.now() - date.getTime()) / 60000)
     if (minutes < 1) return "Just now"
     if (minutes === 1) return "1 minute ago"
-    return `${minutes} minutes ago`
+    if (minutes < 60) return `${minutes} minutes ago`
+    const hours = Math.floor(minutes / 60)
+    if (hours === 1) return "1 hour ago"
+    if (hours < 24) return `${hours} hours ago`
+    const days = Math.floor(hours / 24)
+    if (days === 1) return "1 day ago"
+    return `${days} days ago`
   }
 
   const pendingRequests = requests.filter((req) => req.status === "pending")
   const playingRequests = requests.filter((req) => req.status === "playing")
   const completedRequests = requests.filter((req) => req.status === "completed")
 
-  const RequestCard = ({ request }: { request: SongRequest }) => (
-    <Card className="mb-4 bg-black/40 backdrop-blur-lg border-purple-500/30 shadow-lg shadow-purple-500/10 hover:shadow-purple-500/20 transition-all duration-200">
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between">
-          <div className="flex-1">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="relative">
-                <Music className="w-4 h-4 text-pink-400" />
+  const RequestCard = ({ request }: { request: SongRequest }) => {
+    const isUpdating = updatingIds.has(request.id)
+
+    return (
+      <Card className="mb-4 bg-black/40 backdrop-blur-lg border-purple-500/30 shadow-lg shadow-purple-500/10 hover:shadow-purple-500/20 transition-all duration-200">
+        <CardContent className="p-4">
+          <div className="flex items-start justify-between">
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="relative">
+                  <Music className="w-4 h-4 text-pink-400" />
+                  {request.status === "playing" && (
+                    <div className="absolute inset-0 bg-pink-400 rounded-full blur-sm opacity-50 animate-pulse"></div>
+                  )}
+                </div>
+                <h3 className="font-bold text-white">{request.song_title}</h3>
+                <Badge className={`${getStatusColor(request.status)} font-semibold`}>
+                  {request.status.toUpperCase()}
+                </Badge>
+              </div>
+
+              {request.artist && <p className="text-cyan-300 mb-1 font-medium">by {request.artist}</p>}
+
+              {request.requester_name && (
+                <div className="flex items-center gap-1 text-sm text-gray-300 mb-1">
+                  <User className="w-3 h-3 text-yellow-400" />
+                  Requested by <span className="text-yellow-300 font-semibold">{request.requester_name}</span>
+                </div>
+              )}
+
+              {request.special_message && (
+                <div className="flex items-start gap-1 text-sm text-gray-300 mb-2">
+                  <MessageSquare className="w-3 h-3 mt-0.5 text-purple-400" />
+                  <span className="italic text-purple-300">"{request.special_message}"</span>
+                </div>
+              )}
+
+              <div className="flex items-center gap-1 text-xs text-gray-400">
+                <Clock className="w-3 h-3" />
+                {formatTimeAgo(request.created_at)}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2 ml-4">
+              {request.status === "pending" && (
+                <div className="flex gap-1">
+                  <Button
+                    size="sm"
+                    onClick={() => moveRequest(request.id, "up")}
+                    variant="outline"
+                    disabled={isUpdating}
+                    className="border-cyan-400/50 text-cyan-300 hover:bg-cyan-600/20"
+                  >
+                    {isUpdating ? <Loader2 className="w-3 h-3 animate-spin" /> : <ChevronUp className="w-3 h-3" />}
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => moveRequest(request.id, "down")}
+                    variant="outline"
+                    disabled={isUpdating}
+                    className="border-cyan-400/50 text-cyan-300 hover:bg-cyan-600/20"
+                  >
+                    {isUpdating ? <Loader2 className="w-3 h-3 animate-spin" /> : <ChevronDown className="w-3 h-3" />}
+                  </Button>
+                </div>
+              )}
+
+              <div className="flex gap-1">
+                {request.song_link && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    asChild
+                    className="border-purple-400/50 text-purple-300 hover:bg-purple-600/20 bg-transparent"
+                  >
+                    <a href={request.song_link} target="_blank" rel="noopener noreferrer">
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </Button>
+                )}
+
+                {request.status === "pending" && (
+                  <>
+                    <Button
+                      size="sm"
+                      onClick={() => updateRequestStatus(request.id, "playing")}
+                      disabled={isUpdating}
+                      className="bg-green-600 hover:bg-green-500 text-white"
+                    >
+                      {isUpdating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => updateRequestStatus(request.id, "rejected")}
+                      disabled={isUpdating}
+                      className="bg-red-600 hover:bg-red-500"
+                    >
+                      {isUpdating ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
+                    </Button>
+                  </>
+                )}
+
                 {request.status === "playing" && (
-                  <div className="absolute inset-0 bg-pink-400 rounded-full blur-sm opacity-50 animate-pulse"></div>
+                  <Button
+                    size="sm"
+                    onClick={() => updateRequestStatus(request.id, "completed")}
+                    disabled={isUpdating}
+                    className="bg-blue-600 hover:bg-blue-500 text-white"
+                  >
+                    {isUpdating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                  </Button>
                 )}
               </div>
-              <h3 className="font-bold text-white">{request.songTitle}</h3>
-              <Badge className={`${getStatusColor(request.status)} font-semibold`}>
-                {request.status.toUpperCase()}
-              </Badge>
-            </div>
-
-            {request.artist && <p className="text-cyan-300 mb-1 font-medium">by {request.artist}</p>}
-
-            {request.requesterName && (
-              <div className="flex items-center gap-1 text-sm text-gray-300 mb-1">
-                <User className="w-3 h-3 text-yellow-400" />
-                Requested by <span className="text-yellow-300 font-semibold">{request.requesterName}</span>
-              </div>
-            )}
-
-            {request.specialMessage && (
-              <div className="flex items-start gap-1 text-sm text-gray-300 mb-2">
-                <MessageSquare className="w-3 h-3 mt-0.5 text-purple-400" />
-                <span className="italic text-purple-300">"{request.specialMessage}"</span>
-              </div>
-            )}
-
-            <div className="flex items-center gap-1 text-xs text-gray-400">
-              <Clock className="w-3 h-3" />
-              {formatTimeAgo(request.timestamp)}
             </div>
           </div>
+        </CardContent>
+      </Card>
+    )
+  }
 
-          <div className="flex flex-col gap-2 ml-4">
-            {request.status === "pending" && (
-              <div className="flex gap-1">
-                <Button
-                  size="sm"
-                  onClick={() => moveRequest(request.id, "up")}
-                  variant="outline"
-                  className="border-cyan-400/50 text-cyan-300 hover:bg-cyan-600/20"
-                >
-                  <ChevronUp className="w-3 h-3" />
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={() => moveRequest(request.id, "down")}
-                  variant="outline"
-                  className="border-cyan-400/50 text-cyan-300 hover:bg-cyan-600/20"
-                >
-                  <ChevronDown className="w-3 h-3" />
-                </Button>
-              </div>
-            )}
-
-            <div className="flex gap-1">
-              {request.songLink && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  asChild
-                  className="border-purple-400/50 text-purple-300 hover:bg-purple-600/20 bg-transparent"
-                >
-                  <a href={request.songLink} target="_blank" rel="noopener noreferrer">
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                </Button>
-              )}
-
-              {request.status === "pending" && (
-                <>
-                  <Button
-                    size="sm"
-                    onClick={() => updateRequestStatus(request.id, "playing")}
-                    className="bg-green-600 hover:bg-green-500 text-white"
-                  >
-                    <Play className="w-3 h-3" />
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    onClick={() => updateRequestStatus(request.id, "rejected")}
-                    className="bg-red-600 hover:bg-red-500"
-                  >
-                    <X className="w-3 h-3" />
-                  </Button>
-                </>
-              )}
-
-              {request.status === "playing" && (
-                <Button
-                  size="sm"
-                  onClick={() => updateRequestStatus(request.id, "completed")}
-                  className="bg-blue-600 hover:bg-blue-500 text-white"
-                >
-                  <Check className="w-3 h-3" />
-                </Button>
-              )}
-            </div>
-          </div>
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-12 h-12 animate-spin text-pink-400 mx-auto mb-4" />
+          <p className="text-white text-xl">Loading your requests...</p>
         </div>
-      </CardContent>
-    </Card>
-  )
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900">
@@ -245,12 +276,25 @@ export default function DJDashboard() {
         <DJBanner />
 
         <div className="mb-8">
-          <div className="flex items-center gap-4 mb-4">
+          <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="text-3xl font-bold text-white mb-2">🎛️ CONTROL CENTER</h2>
               <p className="text-cyan-300 text-lg">Master your mix • Control the vibe • Keep the party alive</p>
             </div>
+
+            <Button
+              onClick={loadRequests}
+              variant="outline"
+              className="border-cyan-400/50 text-cyan-300 hover:bg-cyan-600/20 font-semibold bg-transparent"
+            >
+              <RefreshCw className="w-4 h-4 mr-2" />
+              REFRESH
+            </Button>
           </div>
+
+          {error && (
+            <div className="mb-4 p-3 bg-red-500/20 border border-red-400/50 rounded-lg text-red-300">{error}</div>
+          )}
 
           <div className="flex justify-between items-center">
             <Button

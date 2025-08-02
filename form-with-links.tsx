@@ -46,7 +46,7 @@ export default function FormWithLinks() {
             <div className="space-y-2">
               <Button variant="outline" className="w-full bg-transparent" asChild>
                 <a
-                  href="https://www.instagram.com/accounts/login/?hl=en"
+                  href="https://www.instagram.com/idjmanj"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center justify-center gap-2"
